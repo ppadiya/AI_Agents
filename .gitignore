@@ -1,6 +1,6 @@
 .env
 db/
-resumes_sources/
+resumes_source/
 venv/
 fake_resume.md
 tailored_resume.docx
