@@ -1,0 +1,258 @@
+# Warning control
+import warnings
+warnings.filterwarnings('ignore')
+
+from crewai import Agent, Task, Crew, LLM, Process
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
+from IPython.display import Markdown, display
+from crewai_tools import (
+    ScrapeWebsiteTool,
+    WebsiteSearchTool,
+    FileReadTool,
+    MDXSearchTool
+)
+from crewai.tools import BaseTool
+from IPython.display import Markdown, display
+from pydantic import BaseModel
+from langchain_openai import ChatOpenAI
+
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Access the DEEPSEEK_API_KEY environment variable
+
+llm = LLM(
+    model="deepseek/deepseek-chat",
+    temperature=0.7,
+    base_url="https://api.deepseek.com/v1",
+    api_key= os.getenv("DEEPSEEK_API_KEY")
+)
+
+# Initialize the tools
+read_resume = FileReadTool(file_path='./fake_resume.md')
+scrape_tool = ScrapeWebsiteTool()
+search_tool = WebsiteSearchTool(
+    config=dict(
+        llm=dict(
+            provider="google", # or google, openai, anthropic, llama2, ...
+            config=dict(
+                model="gemini-2.0-flash-exp",
+                # temperature=0.5,
+                # top_p=1,
+                # stream=true,
+            ),
+        ),
+        embedder=dict(
+            provider="google", # or openai, ollama, ...
+            config=dict(
+                model="models/embedding-001",
+                task_type="retrieval_document",
+                # title="Embeddings",
+            ),
+        ),
+    )
+)
+
+semantic_search_resume = MDXSearchTool(
+    config=dict(
+        llm=dict(
+            provider="google",
+            config=dict(
+                model="gemini-2.0-flash-exp",
+            ),
+        ),
+        embedder=dict(
+            provider="google",
+            config=dict(
+                model="models/embedding-001",
+                task_type="retrieval_document",
+            ),
+        ),
+    ),
+    mdx='./fake_resume.md'
+)
+
+
+# from IPython.display import Markdown, display
+#display(Markdown("./fake_resume.md"))
+
+# Agent 1: Job Researcher
+researcher = Agent(
+    role="Product Job Researcher",
+    goal="Make sure to do amazing analysis on "
+         "job posting to help job applicants",
+    tools = [scrape_tool, search_tool],
+    llm=llm,
+    verbose=True,
+    backstory=(
+        "As a Job Researcher, your prowess in "
+        "navigating and extracting critical "
+        "information from job postings is unmatched."
+        "Your skills help pinpoint the necessary "
+        "qualifications and skills sought "
+        "by employers, forming the foundation for "
+        "effective application tailoring."
+    )
+)
+
+# Agent 2: Job Profiler
+profiler = Agent(
+    role="Personal Profiler for Product Managers",
+    goal="Do increditble research on job applicants "
+         "to help them stand out in the job market",
+    tools = [scrape_tool, search_tool,
+             read_resume, semantic_search_resume],
+    llm=llm,
+    verbose=True,
+    backstory=(
+        "Equipped with analytical prowess, you dissect "
+        "and synthesize information "
+        "from diverse sources to craft comprehensive "
+        "personal and professional profiles, laying the "
+        "groundwork for personalized resume enhancements."
+    )
+)
+
+# Agent 3: Resume Strategist
+resume_strategist = Agent(
+    role="Resume Strategist for Product Managers",
+    goal="Find all the best ways to make a "
+         "resume stand out in the job market.",
+    tools = [scrape_tool, search_tool,
+             read_resume, semantic_search_resume],
+    llm=llm,
+    verbose=True,
+    backstory=(
+        "With a strategic mind and an eye for detail, you "
+        "excel at refining resumes to highlight the most "
+        "relevant skills and experiences, ensuring they "
+        "resonate perfectly with the job's requirements."
+    )
+)
+
+# Agent 4: ATS Resume Reviewer
+resume_reviewer = Agent(
+    role="ATS Resume Reviewer Expert",
+    goal="Ensure the resume is ATS-friendly and optimized for Applicant Tracking Systems and also provide resume enhancement feedback to resume strategist agent.",
+    tools=[read_resume],
+    llm=llm,
+    verbose=True,
+    backstory=(
+        "As an ATS Resume Reviewer Expert, you possess extensive knowledge of Applicant Tracking Systems and resume best practices. "
+        "Your mission is to review resumes, ensuring they are ATS-friendly and optimized to pass through these systems effectively. "
+        "You provide critical feedback to enhance resume structure, keyword usage, and formatting for optimal ATS performance and overall resume quality."
+    )
+)
+
+
+# Task for Researcher Agent: Extract Job Requirements
+research_task = Task(
+    description=(
+        "Analyze the job posting URL provided ({job_posting_url}) "
+        "to extract key skills, experiences, and qualifications "
+        "required. Use the tools to gather content and identify "
+        "and categorize the requirements."
+    ),
+    expected_output=(
+        "A structured list of job requirements, including necessary "
+        "skills, qualifications, and experiences."
+    ),
+    agent=researcher,
+    async_execution=True
+)
+
+# Task for Profiler Agent: Compile Comprehensive Profile
+profile_task = Task(
+    description=(
+        "Compile a detailed personal and professional profile "
+        "using the personal write-up ({personal_writeup}) and the information from the provided resumes. "
+        "Utilize tools to extract and synthesize information from these sources."
+    ),
+    expected_output=(
+        "A comprehensive profile document that includes skills, "
+        "project experiences, contributions, interests, and "
+        "communication style."
+    ),
+    agent=profiler,
+    async_execution=True
+)
+
+# Task for Resume Strategist Agent: Align Resume with Job Requirements
+resume_strategy_task = Task(
+    description=(
+        "Using the profile and job requirements obtained from "
+        "previous tasks, tailor the resume to highlight the most "
+        "relevant areas. Employ tools to adjust and enhance the "
+        "resume content. Make sure this is the best resume ever. "
+        " **DO NOT** fabricate any information.  Base all revisions"
+         " on the provided profile and current resume content.  Only "
+         "enhance the presentation of existing information to better match"
+          "the job requirements. Update every section, "
+        "inlcuding the initial summary, work experience, skills, "
+        "and education. All to better reflect the candidates "
+        "abilities and how it matches the job posting. Ensure the tailored resume"
+         " is clear, concise, and easy to read. Use professional language and formatting."
+    ),
+    expected_output=(
+        "An updated resume that effectively highlights the candidate's "
+        "qualifications and experiences relevant to the job."
+    ),
+    output_file="tailored_resume.md",
+    context=[research_task, profile_task],
+    agent=resume_strategist
+)
+
+# Task for Resume Reviewer Agent: Review and provide feedback on the tailored resume
+resume_review_task = Task(
+    description=(
+        "Review the tailored resume generated by the Resume Strategist in 'tailored_resume.md'. "
+        "Analyze it for ATS compatibility, keyword optimization, clarity, conciseness, and overall effectiveness. "
+        "Provide specific feedback and suggestions to the Resume Strategist for improvements. "
+        "Consider factors like formatting, section ordering, and content relevance to job requirements. "
+        "If the resume is satisfactory and ATS-optimized, indicate that no further changes are needed. "
+        "If changes are needed, provide detailed points for revision."
+    ),
+    expected_output=(
+        "Feedback on the tailored resume, including specific points for improvement or confirmation of resume's readiness."
+    ),
+    context=[resume_strategy_task],
+    agent=resume_reviewer
+)
+
+
+# Define the crew with agents and tasks
+job_application_crew = Crew(
+    agents=[researcher,
+            profiler,
+            resume_strategist,
+            resume_reviewer
+            ],
+
+    tasks=[research_task,
+           profile_task,
+           resume_strategy_task,
+           resume_review_task
+           ],
+
+    llm=llm,
+    verbose=True
+)
+
+# Run the crew
+job_application_inputs = {
+    'job_posting_url': 'https://jobs.standardchartered.com/job/Singapore-Product-Owner%2528Singapore%252C-India%2529/805145402/',
+    'personal_writeup': """As a seasoned and versatile Product Manager and Solutions Leader, I specialize in driving revenue growth, enhancing 
+customer experience, and developing innovative solutions across diverse industries, particularly in fintech and 
+payments. My expertise includes spearheading cross-functional teams, collaborating with senior stakeholders, and 
+implementing strategic initiatives globally. I possess a strong ability to navigate complex market landscapes, 
+consistently exceeding organizational targets and positioning myself as an asset to any dynamic organization."""
+}
+
+### this execution will take a few minutes to run
+result = job_application_crew.kickoff(inputs=job_application_inputs)
+
+# Display the result
+display(Markdown("./tailored_resume.md"))

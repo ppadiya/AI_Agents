@@ -1,0 +1,9 @@
+.env
+db/
+resume_sources/
+venv/
+fake_resume.md
+tailored_resume.docx
+tailored_resume.md
+temp.py
+test.py
