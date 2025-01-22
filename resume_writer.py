@@ -1,0 +1,193 @@
+import os
+from dotenv import load_dotenv
+from crewai import Agent, Task, Crew, LLM, Process
+from crewai_tools import ScrapeWebsiteTool, WebsiteSearchTool, FileReadTool, MDXSearchTool
+from IPython.display import Markdown, display
+
+# Load environment variables
+load_dotenv()
+
+# Validate API keys
+required_keys = ["DEEPSEEK_API_KEY", "GOOGLE_API_KEY", "SERPER_API_KEY"]
+for key in required_keys:
+    if not os.getenv(key):
+        raise ValueError(f"{key} is missing. Please set it in the .env file.")
+
+# Initialize LLM
+llm = LLM(
+    model="deepseek/deepseek-chat",
+    temperature=0.7,
+    base_url="https://api.deepseek.com/v1",
+    api_key=os.getenv("DEEPSEEK_API_KEY")
+)
+
+# Initialize tools
+resume_file = './fake_resume.md'
+if not os.path.exists(resume_file):
+    raise FileNotFoundError(f"File '{resume_file}' does not exist.")
+
+read_resume = FileReadTool(file_path=resume_file)
+scrape_tool = ScrapeWebsiteTool()
+search_tool = WebsiteSearchTool(
+    config=dict(
+        llm=dict(
+            provider="google", # or google, openai, anthropic, llama2, ...
+            config=dict(
+                model="gemini-2.0-flash-exp",
+                # temperature=0.5,
+                # top_p=1,
+                # stream=true,
+            ),
+        ),
+        embedder=dict(
+            provider="google", # or openai, ollama, ...
+            config=dict(
+                model="models/embedding-001",
+                task_type="retrieval_document",
+                # title="Embeddings",
+            ),
+        ),
+    )
+)
+
+semantic_search_resume = MDXSearchTool(
+    config=dict(
+        llm=dict(
+            provider="google",
+            config=dict(
+                model="gemini-2.0-flash-exp",
+            ),
+        ),
+        embedder=dict(
+            provider="google",
+            config=dict(
+                model="models/embedding-001",
+                task_type="retrieval_document",
+            ),
+        ),
+    ),
+    mdx=resume_file
+)
+
+# Define agents
+researcher = Agent(
+    role="Senior Job Description Analytics Agent",
+    goal="Make sure to do amazing analysis on job posting to help job applicants",
+    tools=[scrape_tool, search_tool],
+    llm=llm,
+    verbose=True,
+    allow_delegation=True,
+    backstory=(
+        "As Senior Job Description Analytics Agent, your prowess in navigating and extracting critical "
+        "information from job postings is unmatched."
+    )
+)
+
+profiler = Agent(
+    role="Personal Profiler for Product Managers",
+    goal="Do incredible research on job applicants to help them stand out in the job market",
+    tools=[scrape_tool, search_tool, read_resume, semantic_search_resume],
+    llm=llm,
+    allow_delegation=True,
+    verbose=True,
+    backstory=(
+        "Equipped with analytical prowess, you dissect and synthesize information to craft comprehensive "
+        "personal and professional profiles."
+    )
+)
+
+resume_strategist = Agent(
+    role="Resume Strategist for Product Managers",
+    goal="Find all the best ways to make a resume stand out in the job market.",
+    tools=[scrape_tool, search_tool, read_resume, semantic_search_resume],
+    llm=llm,
+    allow_delegation=True,
+    verbose=True,
+    backstory=(
+        "With a strategic mind and an eye for detail, you excel at refining resumes to highlight the most "
+        "relevant skills and experiences."
+    )
+)
+
+resume_reviewer = Agent(
+    role="ATS Resume Reviewer Expert",
+    goal="Ensure the resume is ATS-friendly and optimized for Applicant Tracking Systems.",
+    tools=[read_resume],
+    llm=llm,
+    allow_delegation=True,
+    verbose=True,
+    backstory=(
+        "As an ATS Resume Reviewer Expert, you possess extensive knowledge of Applicant Tracking Systems "
+        "and resume best practices."
+    )
+)
+
+# Define tasks
+research_task = Task(
+    description=(
+        "Analyze the job posting URL provided ({job_posting_url}) to extract key skills, experiences, "
+        "and qualifications required."
+    ),
+    expected_output="A structured list of job requirements.",
+    agent=researcher,
+    async_execution=True
+)
+
+profile_task = Task(
+    description=(
+        "Compile a detailed personal and professional profile using the personal write-up ({personal_writeup}) "
+        "and the information from the provided resumes."
+    ),
+    expected_output="A comprehensive profile document.",
+    agent=profiler,
+    async_execution=True
+)
+
+resume_strategy_task = Task(
+    description=(
+        "Using the profile and job requirements obtained from previous tasks, tailor the resume to highlight the "
+        "most relevant areas. DO NOT fabricate any information."
+    ),
+    expected_output="An updated resume that effectively highlights the candidate's qualifications.",
+    output_file="tailored_resume.md",
+    context=[research_task, profile_task],
+    agent=resume_strategist
+)
+
+resume_review_task = Task(
+    description=(
+        "Review the tailored resume generated by the Resume Strategist in 'tailored_resume.md'. Provide feedback "
+        "on its ATS compatibility and suggest improvements if needed."
+    ),
+    expected_output="Feedback on the tailored resume, including points for improvement or confirmation of readiness.",
+    context=[resume_strategy_task],
+    agent=resume_reviewer
+)
+
+# Define the crew
+job_application_crew = Crew(
+    agents=[researcher, profiler, resume_strategist, resume_reviewer],
+    tasks=[research_task, profile_task, resume_strategy_task, resume_review_task],
+    manager_llm=llm,
+    process=Process.hierarchical,
+    llm=llm,
+    verbose=True
+)
+
+# Run the crew
+job_application_inputs = {
+    'job_posting_url': 'https://group.bnpparibas/en/careers/job-offer/apac-digital-transformation-lead',
+    'personal_writeup': (
+        "As a seasoned and versatile Product Manager and Solutions Leader, I specialize in driving revenue growth, "
+        "enhancing customer experience, and developing innovative solutions across diverse industries."
+    )
+}
+
+result = job_application_crew.kickoff(inputs=job_application_inputs)
+
+# Display the result
+output_file = "./tailored_resume.md"
+if os.path.exists(output_file):
+    display(Markdown(output_file))
+else:
+    print(f"Output file '{output_file}' was not generated.")
